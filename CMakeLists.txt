@@ -29,11 +29,21 @@ link_directories(${LIBCAMERA_LIBRARY_DIRS})
 add_compile_options(${LIBCAMERA_CFLAGS_OTHER})
 
 # Create executables
+# main executable (camera list)
+add_executable(main src/main.cpp)
+target_link_libraries(main ${LIBCAMERA_LIBRARIES})
+
 # onecam_capture executable
 add_executable(onecam_capture src/onecam_capture.cpp)
 target_link_libraries(onecam_capture ${LIBCAMERA_LIBRARIES})
 
-# Optional: Set some useful compiler flags
+# onecam_frame executable
+add_executable(onecam_frame src/onecam_frame.cpp)
+target_link_libraries(onecam_frame ${LIBCAMERA_LIBRARIES})
+
+# Optional: Set some useful compiler flags for all executables
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(main PRIVATE -Wall -Wextra)
     target_compile_options(onecam_capture PRIVATE -Wall -Wextra)
+    target_compile_options(onecam_frame PRIVATE -Wall -Wextra)
 endif()

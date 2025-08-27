@@ -2,89 +2,17 @@
 #include <chrono>
 #include <signal.h>
 #include <atomic>
-#include <fstream>
-#include <sstream>
-#include <iomanip>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <cstring>
 
 static std::shared_ptr<Camera> camera;
 static std::atomic<bool> running(true);
 static std::atomic<uint32_t> frameCount(0);
 static auto startTime = std::chrono::steady_clock::now();
-static bool saveNextFrame = false;
-static std::atomic<bool> frameSaved(false);
 
 static void signalHandler(int signal) {
   if (signal == SIGINT) {
     printf("\nReceived interrupt signal, stopping...\n");
     running = false;
   }
-}
-
-// Simple function to save raw buffer as PPM (we'll convert to PNG concept)
-// For true PNG, we'd need libpng or similar
-static void saveFrameAsPPM(const FrameBuffer *buffer, const FrameMetadata &metadata) {
-  auto captureStart = std::chrono::high_resolution_clock::now();
-  
-  // Generate timestamp filename
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
-  
-  std::stringstream filename;
-  filename << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
-  filename << "_" << std::setfill('0') << std::setw(3) << ms.count() << ".ppm";
-  
-  auto processStart = std::chrono::high_resolution_clock::now();
-  
-  // Get the first plane (assuming single plane XRGB8888)
-  const FrameBuffer::Plane &plane = buffer->planes()[0];
-  
-  // Map the buffer memory
-  void *mem = mmap(NULL, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
-  if (mem == MAP_FAILED) {
-    printf("Failed to mmap buffer\n");
-    return;
-  }
-  
-  // Save as PPM (P6 format) - simple format that can be converted to PNG
-  std::ofstream file(filename.str(), std::ios::binary);
-  if (file.is_open()) {
-    // PPM header
-    file << "P6\n640 480\n255\n";
-    
-    // Convert XRGB8888 to RGB for PPM
-    unsigned char *data = (unsigned char *)mem;
-    for (int i = 0; i < 640 * 480; i++) {
-      // Skip X byte, write RGB
-      file.write((char *)(data + i*4 + 1), 1); // R
-      file.write((char *)(data + i*4 + 2), 1); // G  
-      file.write((char *)(data + i*4 + 3), 1); // B
-    }
-    file.close();
-    
-    auto saveEnd = std::chrono::high_resolution_clock::now();
-    
-    // Calculate timings
-    auto captureToProcess = std::chrono::duration_cast<std::chrono::microseconds>
-                           (processStart - captureStart).count();
-    auto processToSave = std::chrono::duration_cast<std::chrono::microseconds>
-                        (saveEnd - processStart).count();
-    auto totalTime = std::chrono::duration_cast<std::chrono::microseconds>
-                    (saveEnd - captureStart).count();
-    
-    printf("\n=== Frame Saved ===\n");
-    printf("Filename: %s\n", filename.str().c_str());
-    printf("Capture → Processing: %ld µs\n", captureToProcess);
-    printf("Processing → Saved: %ld µs\n", processToSave);
-    printf("Total time: %ld µs (%.2f ms)\n", totalTime, totalTime / 1000.0);
-    printf("==================\n\n");
-  }
-  
-  munmap(mem, plane.length);
 }
 
 static void requestComplete(Request *request) {
@@ -97,13 +25,6 @@ static void requestComplete(Request *request) {
   for (auto bufferPair : buffers) {
     FrameBuffer *buffer = bufferPair.second;
     const FrameMetadata &metadata = buffer->metadata();
-    
-    // Save first frame immediately
-    if (saveNextFrame || frameCount == 1) {
-      saveFrameAsPPM(buffer, metadata);
-      saveNextFrame = false;
-      frameSaved = true;
-    }
     
     // Print every 10th frame to reduce output
     if (frameCount % 10 == 0) {
@@ -123,12 +44,6 @@ static void requestComplete(Request *request) {
     }
   }
 
-  // Stop after saving first frame
-  if (frameSaved) {
-    running = false;
-    return;
-  }
-  
   // Continue capturing if still running
   if (running) {
     request->reuse(Request::ReuseBuffers);
@@ -211,7 +126,7 @@ int main() {
   signal(SIGINT, signalHandler);
   
   camera->start();
-  printf("Camera started, capturing and saving first frame...\n");
+  printf("Camera started, beginning capture (press Ctrl+C to stop)...\n");
   
   startTime = std::chrono::steady_clock::now();
   
@@ -220,15 +135,14 @@ int main() {
     camera->queueRequest(request.get());
   }
   
-  // Run until frame is saved or interrupted
+  // Run until interrupted or timeout
   auto captureStart = std::chrono::steady_clock::now();
-  while (running && !frameSaved) {
-    std::this_thread::sleep_for(10ms);
+  while (running) {
+    std::this_thread::sleep_for(100ms);
     
-    // Timeout after 5 seconds if frame not saved
+    // Auto-stop after 10 seconds if not interrupted
     auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - captureStart).count() >= 5) {
-      printf("Timeout waiting for frame\n");
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - captureStart).count() >= 10) {
       running = false;
     }
   }

@@ -2,10 +2,12 @@
 #define MULTICAM_H
 
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <iomanip>
 #include <memory>
 #include <thread>
+#include <errno.h>
 
 #include <libcamera/libcamera.h>
 
