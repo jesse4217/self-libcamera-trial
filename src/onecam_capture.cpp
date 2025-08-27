@@ -16,6 +16,9 @@ static std::atomic<uint32_t> frameCount(0);
 static auto startTime = std::chrono::steady_clock::now();
 static bool saveNextFrame = false;
 static std::atomic<bool> frameSaved(false);
+static uint32_t imageWidth = 0;
+static uint32_t imageHeight = 0;
+static std::string pixelFormat = "";
 
 static void signalHandler(int signal) {
   if (signal == SIGINT) {
@@ -24,23 +27,24 @@ static void signalHandler(int signal) {
   }
 }
 
-// Simple function to save raw buffer as PPM (we'll convert to PNG concept)
-// For true PNG, we'd need libpng or similar
-static void saveFrameAsPPM(const FrameBuffer *buffer, const FrameMetadata &metadata) {
+// Simple function to save raw buffer directly
+static void saveFrameAsRAW(const FrameBuffer *buffer, const FrameMetadata &metadata) {
   auto captureStart = std::chrono::high_resolution_clock::now();
   
-  // Generate timestamp filename
+  // Generate timestamp filename with resolution
   auto now = std::chrono::system_clock::now();
   auto time_t = std::chrono::system_clock::to_time_t(now);
   auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
   
   std::stringstream filename;
   filename << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
-  filename << "_" << std::setfill('0') << std::setw(3) << ms.count() << ".ppm";
+  filename << "_" << std::setfill('0') << std::setw(3) << ms.count();
+  filename << "_" << imageWidth << "x" << imageHeight;
+  filename << ".raw";
   
   auto processStart = std::chrono::high_resolution_clock::now();
   
-  // Get the first plane (assuming single plane XRGB8888)
+  // Get the first plane
   const FrameBuffer::Plane &plane = buffer->planes()[0];
   
   // Map the buffer memory
@@ -50,20 +54,10 @@ static void saveFrameAsPPM(const FrameBuffer *buffer, const FrameMetadata &metad
     return;
   }
   
-  // Save as PPM (P6 format) - simple format that can be converted to PNG
+  // Save raw buffer directly - no conversion needed!
   std::ofstream file(filename.str(), std::ios::binary);
   if (file.is_open()) {
-    // PPM header
-    file << "P6\n640 480\n255\n";
-    
-    // Convert XRGB8888 to RGB for PPM
-    unsigned char *data = (unsigned char *)mem;
-    for (int i = 0; i < 640 * 480; i++) {
-      // Skip X byte, write RGB
-      file.write((char *)(data + i*4 + 1), 1); // R
-      file.write((char *)(data + i*4 + 2), 1); // G  
-      file.write((char *)(data + i*4 + 3), 1); // B
-    }
+    file.write((char *)mem, plane.length);
     file.close();
     
     auto saveEnd = std::chrono::high_resolution_clock::now();
@@ -78,9 +72,15 @@ static void saveFrameAsPPM(const FrameBuffer *buffer, const FrameMetadata &metad
     
     printf("\n=== Frame Saved ===\n");
     printf("Filename: %s\n", filename.str().c_str());
+    printf("Resolution: %dx%d\n", imageWidth, imageHeight);
+    printf("Pixel Format: %s\n", pixelFormat.c_str());
+    printf("Buffer Size: %zu bytes\n", plane.length);
     printf("Capture → Processing: %ld µs\n", captureToProcess);
     printf("Processing → Saved: %ld µs\n", processToSave);
     printf("Total time: %ld µs (%.2f ms)\n", totalTime, totalTime / 1000.0);
+    printf("\nTo convert to PNG, use:\n");
+    printf("ffmpeg -f rawvideo -pixel_format bgra -s %dx%d -i %s output.png\n",
+           imageWidth, imageHeight, filename.str().c_str());
     printf("==================\n\n");
   }
   
@@ -100,7 +100,7 @@ static void requestComplete(Request *request) {
     
     // Save first frame immediately
     if (saveNextFrame || frameCount == 1) {
-      saveFrameAsPPM(buffer, metadata);
+      saveFrameAsRAW(buffer, metadata);
       saveNextFrame = false;
       frameSaved = true;
     }
@@ -162,11 +162,20 @@ int main() {
   StreamConfiguration &streamConfig = config->at(0);
   printf("Default viewfinder configuration is: %s\n",
          streamConfig.toString().c_str());
-  streamConfig.size.width = 640;
-  streamConfig.size.height = 480;
+  
+  // Don't set fixed resolution - use camera's default/maximum
+  // The camera will use its highest available resolution for Viewfinder
   config->validate();
-  printf("Validated viewfinder configuration is: %s\n",
-         streamConfig.toString().c_str());
+  
+  // Store the actual resolution and format
+  imageWidth = streamConfig.size.width;
+  imageHeight = streamConfig.size.height;
+  pixelFormat = streamConfig.pixelFormat.toString();
+  
+  printf("Using configuration: %s\n", streamConfig.toString().c_str());
+  printf("Resolution: %dx%d\n", imageWidth, imageHeight);
+  printf("Pixel Format: %s\n", pixelFormat.c_str());
+  
   camera->configure(config.get());
 
   FrameBufferAllocator *allocator = new FrameBufferAllocator(camera);
