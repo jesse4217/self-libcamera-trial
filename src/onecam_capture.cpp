@@ -1,14 +1,4 @@
 #include "multicam.h"
-#include <chrono>
-#include <signal.h>
-#include <atomic>
-#include <fstream>
-#include <sstream>
-#include <iomanip>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <cstring>
 
 static std::shared_ptr<Camera> camera;
 static std::atomic<bool> running(true);
