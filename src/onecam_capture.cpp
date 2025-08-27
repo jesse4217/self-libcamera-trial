@@ -3,7 +3,28 @@
 static std::shared_ptr<Camera> camera;
 
 static void requestComplete(Request *request) {
-  // Code to follow
+  if (request->status() == Request::RequestCancelled)
+    return;
+
+  const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
+  for (auto bufferPair : buffers) {
+    FrameBuffer *buffer = bufferPair.second;
+    const FrameMetadata &metadata = buffer->metadata();
+    printf(" seq: %06u bytesused: ", metadata.sequence);
+
+    unsigned int nplane = 0;
+    for (const FrameMetadata::Plane &plane : metadata.planes()) {
+      printf("%u", plane.bytesused);
+      if (++nplane < metadata.planes().size())
+        printf("/");
+    }
+
+    printf("\n");
+  }
+
+  // Reuse the request and re-queue it
+  request->reuse(Request::ReuseBuffers);
+  camera->queueRequest(request);
 }
 
 int main() {
@@ -72,37 +93,22 @@ int main() {
     }
 
     requests.push_back(std::move(request));
-
-    if (request->status() == Request::RequestCancelled)
-      return -1;
-
-    const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
-    for (auto bufferPair : buffers) {
-      FrameBuffer *buffer = bufferPair.second;
-      const FrameMetadata &metadata = buffer->metadata();
-      printf(" seq: %06u bytesused: ", metadata.sequence);
-
-      unsigned int nplane = 0;
-      for (const FrameMetadata::Plane &plane : metadata.planes()) {
-        printf("%u", plane.bytesused);
-        if (++nplane < metadata.planes().size())
-          printf("/");
-      }
-
-      printf("\n");
-    }
-
-    request->reuse(Request::ReuseBuffers);
   }
 
 
   camera->requestCompleted.connect(requestComplete);
 
   camera->start();
+  printf("Camera started, beginning capture...\n");
+  
+  // Queue all requests initially
   for (std::unique_ptr<Request> &request : requests) {
     camera->queueRequest(request.get());
-    std::this_thread::sleep_for(3000ms);
   }
+  
+  // Let it run for a few seconds
+  std::this_thread::sleep_for(5000ms);
+  printf("Stopping capture...\n");
 
   // Clean
   camera->stop();
