@@ -36,7 +36,18 @@ static void detectFormatDetails(const StreamConfiguration &config) {
   imageWidth = config.size.width;
   imageHeight = config.size.height;
   imageStride = config.stride;
-  numPlanes = config.pixelFormat.planesCount();
+  
+  // Estimate number of planes based on format (since planesCount() doesn't exist)
+  std::string formatStr = pixelFormat;
+  if (formatStr.find("YUV420") != std::string::npos ||
+      formatStr.find("YV12") != std::string::npos) {
+    numPlanes = 3;  // Y, U, V planes
+  } else if (formatStr.find("NV12") != std::string::npos ||
+             formatStr.find("NV21") != std::string::npos) {
+    numPlanes = 2;  // Y plane + UV plane
+  } else {
+    numPlanes = 1;  // Most RGB formats are single plane
+  }
   
   // Determine bits per pixel based on format
   std::string formatStr = pixelFormat;
@@ -71,7 +82,7 @@ static std::string getFFmpegPixelFormat(const std::string &libcameraFormat) {
 }
 
 // Improved function to save raw buffer with proper stride handling
-static void saveFrameAsRAW(const FrameBuffer *buffer, const FrameMetadata &metadata) {
+static void saveFrameAsRAW(const FrameBuffer *buffer, const FrameMetadata &) {
   auto captureStart = std::chrono::high_resolution_clock::now();
   
   // Generate timestamp filename with detailed format info
