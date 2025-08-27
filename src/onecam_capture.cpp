@@ -18,7 +18,10 @@ static bool saveNextFrame = false;
 static std::atomic<bool> frameSaved(false);
 static uint32_t imageWidth = 0;
 static uint32_t imageHeight = 0;
+static uint32_t imageStride = 0;
 static std::string pixelFormat = "";
+static uint32_t bitsPerPixel = 0;
+static uint32_t numPlanes = 0;
 
 static void signalHandler(int signal) {
   if (signal == SIGINT) {
@@ -27,11 +30,51 @@ static void signalHandler(int signal) {
   }
 }
 
-// Simple function to save raw buffer directly
+// Function to detect pixel format details
+static void detectFormatDetails(const StreamConfiguration &config) {
+  pixelFormat = config.pixelFormat.toString();
+  imageWidth = config.size.width;
+  imageHeight = config.size.height;
+  imageStride = config.stride;
+  numPlanes = config.pixelFormat.planesCount();
+  
+  // Determine bits per pixel based on format
+  std::string formatStr = pixelFormat;
+  if (formatStr.find("XRGB8888") != std::string::npos ||
+      formatStr.find("ARGB8888") != std::string::npos ||
+      formatStr.find("XBGR8888") != std::string::npos) {
+    bitsPerPixel = 32;
+  } else if (formatStr.find("RGB888") != std::string::npos ||
+             formatStr.find("BGR888") != std::string::npos) {
+    bitsPerPixel = 24;
+  } else if (formatStr.find("YUYV") != std::string::npos ||
+             formatStr.find("UYVY") != std::string::npos) {
+    bitsPerPixel = 16;
+  } else if (formatStr.find("YUV420") != std::string::npos ||
+             formatStr.find("NV12") != std::string::npos) {
+    bitsPerPixel = 12;  // 1.5 bytes per pixel on average
+  } else {
+    bitsPerPixel = 8;  // Default assumption
+  }
+}
+
+// Function to get appropriate ffmpeg pixel format
+static std::string getFFmpegPixelFormat(const std::string &libcameraFormat) {
+  if (libcameraFormat.find("XRGB8888") != std::string::npos) return "bgr0";
+  if (libcameraFormat.find("XBGR8888") != std::string::npos) return "rgb0";
+  if (libcameraFormat.find("ARGB8888") != std::string::npos) return "bgra";
+  if (libcameraFormat.find("YUYV") != std::string::npos) return "yuyv422";
+  if (libcameraFormat.find("UYVY") != std::string::npos) return "uyvy422";
+  if (libcameraFormat.find("YUV420") != std::string::npos) return "yuv420p";
+  if (libcameraFormat.find("NV12") != std::string::npos) return "nv12";
+  return "bgra";  // Default fallback
+}
+
+// Improved function to save raw buffer with proper stride handling
 static void saveFrameAsRAW(const FrameBuffer *buffer, const FrameMetadata &metadata) {
   auto captureStart = std::chrono::high_resolution_clock::now();
   
-  // Generate timestamp filename with resolution
+  // Generate timestamp filename with detailed format info
   auto now = std::chrono::system_clock::now();
   auto time_t = std::chrono::system_clock::to_time_t(now);
   auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
@@ -40,24 +83,49 @@ static void saveFrameAsRAW(const FrameBuffer *buffer, const FrameMetadata &metad
   filename << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
   filename << "_" << std::setfill('0') << std::setw(3) << ms.count();
   filename << "_" << imageWidth << "x" << imageHeight;
+  filename << "_" << pixelFormat;
   filename << ".raw";
   
   auto processStart = std::chrono::high_resolution_clock::now();
   
-  // Get the first plane
-  const FrameBuffer::Plane &plane = buffer->planes()[0];
+  // Handle buffer mapping - map all planes in one go if they share the same fd
+  const std::vector<FrameBuffer::Plane> &planes = buffer->planes();
   
-  // Map the buffer memory
-  void *mem = mmap(NULL, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
+  printf("\n=== Buffer Debug Info ===\n");
+  printf("Number of planes: %zu\n", planes.size());
+  
+  // Map the first plane (main buffer)
+  const FrameBuffer::Plane &plane0 = planes[0];
+  void *mem = mmap(NULL, plane0.length, PROT_READ, MAP_SHARED, plane0.fd.get(), 0);
   if (mem == MAP_FAILED) {
-    printf("Failed to mmap buffer\n");
+    printf("Failed to mmap buffer: %s\n", strerror(errno));
     return;
   }
   
-  // Save raw buffer directly - no conversion needed!
+  // Debug: Print plane information
+  for (size_t i = 0; i < planes.size(); ++i) {
+    printf("Plane %zu: offset=%u, length=%u\n", i, planes[i].offset, planes[i].length);
+  }
+  
+  // Save different data based on number of planes and stride
   std::ofstream file(filename.str(), std::ios::binary);
   if (file.is_open()) {
-    file.write((char *)mem, plane.length);
+    if (imageStride == imageWidth * (bitsPerPixel / 8)) {
+      // No padding, can save directly
+      printf("No stride padding detected, saving full buffer\n");
+      file.write((char *)mem, plane0.length);
+    } else {
+      // Has stride padding, save row by row
+      printf("Stride padding detected (stride=%u, expected=%u)\n", 
+             imageStride, imageWidth * (bitsPerPixel / 8));
+      
+      uint8_t *data = (uint8_t *)mem;
+      uint32_t bytesPerRow = imageWidth * (bitsPerPixel / 8);
+      
+      for (uint32_t row = 0; row < imageHeight; ++row) {
+        file.write((char *)(data + row * imageStride), bytesPerRow);
+      }
+    }
     file.close();
     
     auto saveEnd = std::chrono::high_resolution_clock::now();
@@ -73,18 +141,25 @@ static void saveFrameAsRAW(const FrameBuffer *buffer, const FrameMetadata &metad
     printf("\n=== Frame Saved ===\n");
     printf("Filename: %s\n", filename.str().c_str());
     printf("Resolution: %dx%d\n", imageWidth, imageHeight);
+    printf("Stride: %u bytes\n", imageStride);
     printf("Pixel Format: %s\n", pixelFormat.c_str());
-    printf("Buffer Size: %zu bytes\n", plane.length);
+    printf("Bits per pixel: %u\n", bitsPerPixel);
+    printf("Number of planes: %u\n", numPlanes);
+    printf("Buffer length: %u bytes\n", plane0.length);
+    printf("Actual image size: %u bytes\n", imageWidth * imageHeight * (bitsPerPixel / 8));
     printf("Capture → Processing: %ld µs\n", captureToProcess);
     printf("Processing → Saved: %ld µs\n", processToSave);
     printf("Total time: %ld µs (%.2f ms)\n", totalTime, totalTime / 1000.0);
+    
+    // Generate correct ffmpeg command
+    std::string ffmpegFormat = getFFmpegPixelFormat(pixelFormat);
     printf("\nTo convert to PNG, use:\n");
-    printf("ffmpeg -f rawvideo -pixel_format bgra -s %dx%d -i %s output.png\n",
-           imageWidth, imageHeight, filename.str().c_str());
+    printf("ffmpeg -f rawvideo -pixel_format %s -s %dx%d -i %s output.png\n",
+           ffmpegFormat.c_str(), imageWidth, imageHeight, filename.str().c_str());
     printf("==================\n\n");
   }
   
-  munmap(mem, plane.length);
+  munmap(mem, plane0.length);
 }
 
 static void requestComplete(Request *request) {
@@ -167,14 +242,17 @@ int main() {
   // The camera will use its highest available resolution for Viewfinder
   config->validate();
   
-  // Store the actual resolution and format
-  imageWidth = streamConfig.size.width;
-  imageHeight = streamConfig.size.height;
-  pixelFormat = streamConfig.pixelFormat.toString();
+  // Detect and store detailed format information
+  detectFormatDetails(streamConfig);
   
   printf("Using configuration: %s\n", streamConfig.toString().c_str());
   printf("Resolution: %dx%d\n", imageWidth, imageHeight);
+  printf("Stride: %u bytes\n", imageStride);
   printf("Pixel Format: %s\n", pixelFormat.c_str());
+  printf("Bits per pixel: %u\n", bitsPerPixel);
+  printf("Number of planes: %u\n", numPlanes);
+  printf("Expected bytes per row: %u\n", imageWidth * (bitsPerPixel / 8));
+  printf("Actual stride: %u\n", imageStride);
   
   camera->configure(config.get());
 
