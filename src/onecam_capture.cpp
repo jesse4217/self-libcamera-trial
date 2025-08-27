@@ -184,21 +184,15 @@ static void requestComplete(Request *request) {
     FrameBuffer *buffer = bufferPair.second;
     const FrameMetadata &metadata = buffer->metadata();
     
-    // Save frame after auto-exposure has stabilized (frame 15)
-    if (saveNextFrame || frameCount == 15) {
-      printf("\nCapturing frame %u (after auto-exposure stabilization)...\n", frameCount.load());
+    // Save first frame immediately
+    if (saveNextFrame || frameCount == 1) {
       saveFrameAsRAW(buffer, metadata);
       saveNextFrame = false;
       frameSaved = true;
     }
     
-    // Print progress every 5 frames during stabilization
-    if (frameCount <= 20 && frameCount % 5 == 0) {
-      printf("Frame %u - Auto-exposure stabilizing...\n", frameCount.load());
-    }
-    
-    // Print every 10th frame to reduce output after stabilization
-    if (frameCount > 20 && frameCount % 10 == 0) {
+    // Print every 10th frame to reduce output
+    if (frameCount % 10 == 0) {
       auto currentTime = std::chrono::steady_clock::now();
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime).count();
       float fps = (frameCount * 1000.0f) / elapsed;
@@ -315,8 +309,7 @@ int main() {
   signal(SIGINT, signalHandler);
   
   camera->start();
-  printf("Camera started, waiting for auto-exposure to stabilize...\n");
-  printf("Will capture frame #15 for optimal exposure...\n");
+  printf("Camera started, capturing and saving first frame...\n");
   
   startTime = std::chrono::steady_clock::now();
   
@@ -325,18 +318,15 @@ int main() {
     camera->queueRequest(request.get());
   }
   
-  // Add small initial delay for camera initialization
-  std::this_thread::sleep_for(500ms);
-  
   // Run until frame is saved or interrupted
   auto captureStart = std::chrono::steady_clock::now();
   while (running && !frameSaved) {
-    std::this_thread::sleep_for(50ms);
+    std::this_thread::sleep_for(10ms);
     
-    // Timeout after 10 seconds if frame not saved
+    // Timeout after 5 seconds if frame not saved
     auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - captureStart).count() >= 10) {
-      printf("Timeout waiting for frame (captured %u frames)\n", frameCount.load());
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - captureStart).count() >= 5) {
+      printf("Timeout waiting for frame\n");
       running = false;
     }
   }
