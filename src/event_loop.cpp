@@ -56,7 +56,7 @@ void EventLoop::interrupt()
 }
 
 
-void EventLoop::timeoutTriggered(int fd, short event, void *arg)
+void EventLoop::timeoutTriggered(int, short, void *arg)
 {
 	EventLoop *self = static_cast<EventLoop *>(arg);
 	self->exit();
