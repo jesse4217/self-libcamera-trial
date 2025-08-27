@@ -25,7 +25,7 @@ int main() {
   std::string cameraId = cameras[0]->id();
   camera = cameraManager->get(cameraId);
   camera->acquire();
-  printf("Camera Acquired: %s\n", cameraId);
+  printf("Camera Acquired: %s\n", cameraId.c_str());
 
   std::unique_ptr<CameraConfiguration> config =
       camera->generateConfiguration({StreamRole::Viewfinder});
@@ -44,12 +44,12 @@ int main() {
   for (StreamConfiguration &cfg : *config) {
     int ret = allocator->allocate(cfg.stream());
     if (ret < 0) {
-      print("Can't allocate buffers\n");
+      printf("Can't allocate buffers\n");
       return -ENOMEM;
     }
 
     size_t allocated = allocator->buffers(cfg.stream()).size();
-    print("Allocated:%s\n", allocated);
+    printf("Allocated: %zu\n", allocated);
   }
 
   Stream *stream = streamConfig.stream();
@@ -74,29 +74,27 @@ int main() {
     requests.push_back(std::move(request));
 
     if (request->status() == Request::RequestCancelled)
-      return;
+      return -1;
 
     const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
     for (auto bufferPair : buffers) {
       FrameBuffer *buffer = bufferPair.second;
       const FrameMetadata &metadata = buffer->metadata();
-      std::cout << " seq: " << std::setw(6) << std::setfill('0')
-                << metadata.sequence << " bytesused: ";
+      printf(" seq: %06u bytesused: ", metadata.sequence);
 
       unsigned int nplane = 0;
       for (const FrameMetadata::Plane &plane : metadata.planes()) {
-        std::cout << plane.bytesused;
+        printf("%u", plane.bytesused);
         if (++nplane < metadata.planes().size())
-          std::cout << "/";
+          printf("/");
       }
 
-      std::cout << std::endl;
+      printf("\n");
     }
 
     request->reuse(Request::ReuseBuffers);
   }
 
-  camera->queueRequest(request);
 
   camera->requestCompleted.connect(requestComplete);
 

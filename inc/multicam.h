@@ -2,6 +2,7 @@
 #define MULTICAM_H
 
 #include <cstdio>
+#include <iostream>
 #include <iomanip>
 #include <memory>
 #include <thread>
