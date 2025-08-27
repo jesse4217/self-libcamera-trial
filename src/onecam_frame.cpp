@@ -1,7 +1,4 @@
 #include "multicam.h"
-#include <chrono>
-#include <signal.h>
-#include <atomic>
 
 static std::shared_ptr<Camera> camera;
 static std::atomic<bool> running(true);
@@ -20,18 +17,20 @@ static void requestComplete(Request *request) {
     return;
 
   frameCount++;
-  
+
   const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
   for (auto bufferPair : buffers) {
     FrameBuffer *buffer = bufferPair.second;
     const FrameMetadata &metadata = buffer->metadata();
-    
+
     // Print every 10th frame to reduce output
     if (frameCount % 10 == 0) {
       auto currentTime = std::chrono::steady_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime).count();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         currentTime - startTime)
+                         .count();
       float fps = (frameCount * 1000.0f) / elapsed;
-      printf(" seq: %06u | frames: %u | fps: %.1f | bytesused: ", 
+      printf(" seq: %06u | frames: %u | fps: %.1f | bytesused: ",
              metadata.sequence, frameCount.load(), fps);
 
       unsigned int nplane = 0;
@@ -119,55 +118,57 @@ int main() {
     requests.push_back(std::move(request));
   }
 
-
   camera->requestCompleted.connect(requestComplete);
 
   // Setup signal handler for graceful shutdown
   signal(SIGINT, signalHandler);
-  
+
   camera->start();
   printf("Camera started, beginning capture (press Ctrl+C to stop)...\n");
-  
+
   startTime = std::chrono::steady_clock::now();
-  
+
   // Queue all requests initially
   for (std::unique_ptr<Request> &request : requests) {
     camera->queueRequest(request.get());
   }
-  
+
   // Run until interrupted or timeout
   auto captureStart = std::chrono::steady_clock::now();
   while (running) {
     std::this_thread::sleep_for(100ms);
-    
+
     // Auto-stop after 10 seconds if not interrupted
     auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - captureStart).count() >= 10) {
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - captureStart)
+            .count() >= 10) {
       running = false;
     }
   }
-  
+
   // Calculate final statistics
   auto endTime = std::chrono::steady_clock::now();
-  auto totalTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+  auto totalTime =
+      std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime)
+          .count();
   float avgFps = (frameCount * 1000.0f) / totalTime;
-  
+
   printf("\nStopping capture...\n");
-  printf("Captured %u frames in %.2f seconds (%.1f fps average)\n", 
+  printf("Captured %u frames in %.2f seconds (%.1f fps average)\n",
          frameCount.load(), totalTime / 1000.0f, avgFps);
 
   // Clean up in correct order
   camera->stop();
-  
+
   // Wait for any pending operations to complete
   std::this_thread::sleep_for(100ms);
-  
+
   allocator->free(stream);
   delete allocator;
   camera->release();
   camera.reset();
   cameraManager->stop();
-  
+
   printf("Cleanup complete.\n");
 
   return 0;
