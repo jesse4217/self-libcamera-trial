@@ -18,6 +18,12 @@ find_package(PkgConfig REQUIRED)
 # Find libcamera using pkg-config
 pkg_check_modules(LIBCAMERA REQUIRED libcamera)
 
+# Find libevent for simple_cam
+find_package(Threads REQUIRED)
+find_path(LIBEVENT_INCLUDE_DIR event.h)
+find_library(LIBEVENT_LIBRARY event)
+find_library(LIBEVENT_PTHREADS event_pthreads)
+
 # Add include directories
 include_directories(${LIBCAMERA_INCLUDE_DIRS})
 include_directories(${CMAKE_SOURCE_DIR}/inc)
@@ -43,7 +49,7 @@ target_link_libraries(onecam_frame ${LIBCAMERA_LIBRARIES})
 
 # simple_cam executable (with event_loop)
 add_executable(simple_cam src/simple_cam.cpp src/event_loop.cpp)
-target_link_libraries(simple_cam ${LIBCAMERA_LIBRARIES})
+target_link_libraries(simple_cam ${LIBCAMERA_LIBRARIES} ${LIBEVENT_LIBRARY} ${LIBEVENT_PTHREADS} Threads::Threads)
 
 # Optional: Set some useful compiler flags for all executables
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
